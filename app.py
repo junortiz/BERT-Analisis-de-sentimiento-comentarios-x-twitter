@@ -83,7 +83,7 @@ class Config:
     """Clase de configuración para almacenar todos los parámetros del proyecto"""
     # Parámetros de datos
     RANDOM_SEED = 42  # Semilla aleatoria para reproducibilidad
-    MAX_LEN = 200     # Longitud máxima de secuencia para BERT
+    MAX_LEN = 600     # Longitud máxima de secuencia para BERT
     BATCH_SIZE = 32   # Tamaño de lote para entrenamiento
     DATASET_PATH = '' # Se llenará desde la UI
     TEST_SIZE = 0.2   # Proporción para conjunto de prueba

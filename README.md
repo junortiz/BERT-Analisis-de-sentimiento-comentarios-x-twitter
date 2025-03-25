@@ -7,9 +7,32 @@ Este proyecto analiza el sentimiento de comentarios sobre políticas energética
 
 El modelo alcanzó una precisión del **62.96%**, identificando patrones lingüísticos asociados a opiniones positivas y negativas. Se detectó un debate polarizado con una ligera tendencia hacia comentarios positivos sobre energías renovables, aunque con preocupaciones económicas y de implementación.
 
-## 🌐 Acceso al Modelo
-🔗 **El modelo preentrenado está disponible en la siguiente URL pública:** 
-[URL_DEL_MODELO](#)
+## 🌐 Acceso al Modelo  
+
+🔍 **Este modelo es un archivo `.pt` que contiene una versión finetuneada de BERT**, específicamente entrenada para el análisis de comentarios sobre políticas públicas y energéticas en Colombia. 🏛️⚡  
+
+📢 **¡El modelo ya está disponible para su uso en línea!** Puedes probarlo directamente en la aplicación de Streamlit:  
+👉 [🔗 **bert-talent-tech.streamlit.app**](https://bert-talent-tech.streamlit.app/)  
+
+📥 **Opciones de descarga y repositorio**  
+
+🔹 **Mediafire**: [📂 Carpeta del modelo en Mediafire](https://www.mediafire.com/folder/7fytsb7tv9anz/TalentoTech2025_IA)  
+🔹 **OneDrive**: [📁 Carpeta del modelo en OneDrive](https://1drv.ms/f/c/5277a5d3cfb61d6b/EtJzKYgzq75Ek07LacS1GNwBn7Ow5MZ-dYhWdsN6_wcLjw?e=Wsy3AH)  
+🔹 **Repositorio en GitHub**: [📜 Código fuente en GitHub (rama master)](https://github.com/junortiz/BERT-Analisis-de-sentimiento-comentarios-x-twitter/tree/master)  
+
+📌 **Opciones de uso:**  
+
+1️⃣ **Prueba el modelo en línea** en la aplicación de Streamlit.  
+2️⃣ **Descarga manualmente el modelo** y agrégalo a la carpeta `models/` de tu proyecto.  
+3️⃣ **Descarga automática desde Hugging Face** dentro de la aplicación.  
+
+🖼️ **Ejemplo de la opción en la aplicación:**  
+
+![Interfaz de Streamlit](https://live.staticflickr.com/65535/54408848458_fb31148eb6_b.jpg)  
+
+🖼️ **Pasos para cargar modelo:**  
+
+![Interfaz de Streamlit](https://live.staticflickr.com/65535/54408973810_bd3b492f08_b.jpg)  
 
 ### 🚀 Opciones de Uso
 1. **Cargar el modelo preentrenado** y obtener resultados de inmediato.
@@ -146,6 +169,8 @@ Si hay problemas al cargar datos:
 1. Verifica que el archivo tenga las columnas `review` y `sentiment`.
 2. Asegúrate de que esté en formato UTF-8.
 3. Comprueba que no haya valores nulos en las columnas principales.
+
+
 
 ---
 

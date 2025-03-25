@@ -21,6 +21,10 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import confusion_matrix, classification_report, roc_curve, auc
 from sklearn.utils.class_weight import compute_class_weight
 from torch.utils.data import Dataset, DataLoader
+import requests
+from tqdm.auto import tqdm
+import io
+import zipfile
 
 # Configuraciones de página
 st.set_page_config(
@@ -112,22 +116,42 @@ def cargar_modelo(ruta_modelo, tokenizer_name='bert-base-cased'):
     # Configuración
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     
-    # Cargar tokenizador
-    tokenizer = BertTokenizer.from_pretrained(tokenizer_name)
-    
-    # Inicializar modelo
-    modelo = ClasificadorSentimientoBERT(
-        n_clases=2,
-        nombre_modelo=tokenizer_name,
-        prob_dropout=0.5
-    )
-    
-    # Cargar pesos guardados
-    modelo.load_state_dict(torch.load(ruta_modelo, map_location=device))
-    modelo = modelo.to(device)
-    modelo.eval()
-    
-    return modelo, tokenizer, device
+    try:
+        # Cargar tokenizador
+        # Primero verificar si hay una carpeta de tokenizer junto al modelo
+        tokenizer_dir = os.path.join(os.path.dirname(ruta_modelo), 'tokenizer')
+        if os.path.exists(tokenizer_dir):
+            tokenizer = BertTokenizer.from_pretrained(tokenizer_dir)
+        else:
+            # Si no, usar el tokenizer por defecto
+            tokenizer = BertTokenizer.from_pretrained(tokenizer_name)
+        
+        # Inicializar modelo
+        modelo = ClasificadorSentimientoBERT(
+            n_clases=2,
+            nombre_modelo=tokenizer_name,
+            prob_dropout=0.5
+        )
+        
+        # Cargar pesos guardados
+        estado_modelo = torch.load(ruta_modelo, map_location=device)
+        
+        # Verificar si el objeto cargado es un diccionario de estado
+        if isinstance(estado_modelo, dict) and 'state_dict' in estado_modelo:
+            # Si es un objeto saved_model completo con state_dict
+            modelo.load_state_dict(estado_modelo['state_dict'])
+        else:
+            # Asumir que es directamente el state_dict
+            modelo.load_state_dict(estado_modelo)
+            
+        modelo = modelo.to(device)
+        modelo.eval()
+        
+        return modelo, tokenizer, device
+        
+    except Exception as e:
+        st.error(f"Error al cargar el modelo: {str(e)}")
+        raise e
 
 # Dataset para entrenamiento
 class DatasetSentimiento(Dataset):
@@ -629,6 +653,175 @@ if 'tokenizer' not in st.session_state:
 if 'device' not in st.session_state:
     st.session_state.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
+# Función mejorada para verificar disponibilidad en Hugging Face
+def verificar_modelo_huggingface(url):
+    """
+    Verifica si un modelo está disponible en Hugging Face con mejor soporte para Git LFS
+    
+    Args:
+        url (str): URL del modelo en Hugging Face
+    
+    Returns:
+        tuple: (disponible, tamaño_mb)
+    """
+    try:
+        # Para archivos de Hugging Face, especialmente con Git LFS, 
+        # es mejor hacer un GET con stream=True que un HEAD
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+        
+        # Hacer una solicitud GET pero solo para obtener los headers (no descargamos todo el archivo)
+        response = requests.get(url, stream=True, headers=headers, allow_redirects=True, timeout=10)
+        
+        # Comprobar si la solicitud fue exitosa
+        if response.status_code != 200:
+            st.sidebar.error(f"Error al verificar el modelo: Código de estado {response.status_code}")
+            return False, 0
+        
+        # Obtener tamaño total (si está disponible)
+        total_size = int(response.headers.get('content-length', 0))
+        
+        # Si no tenemos tamaño pero la respuesta es 200, probablemente sea válido
+        if total_size == 0 and response.status_code == 200:
+            # No podemos determinar el tamaño exacto, pero el recurso parece existir
+            return True, 436  # Tamaño conocido de tu modelo (436 MB)
+            
+        total_size_mb = total_size / (1024 * 1024)  # Convertir a MB
+        
+        # Cerrar la conexión para no descargar el archivo completo
+        response.close()
+        
+        return True, round(total_size_mb, 2)
+    except Exception as e:
+        st.sidebar.error(f"Error al verificar disponibilidad: {str(e)}")
+        # Si hay un error de timeout o conexión, asumimos que el modelo existe
+        # pero hay problemas de red
+        return True, 436  # Tamaño conocido de tu modelo (436 MB)
+
+# Función mejorada para descargar desde Hugging Face
+def descargar_modelo_huggingface(url, ruta_destino):
+    """
+    Descarga un modelo desde Hugging Face con mejor manejo de errores y Git LFS
+    
+    Args:
+        url (str): URL del modelo en Hugging Face
+        ruta_destino (str): Ruta donde se guardará el modelo
+    
+    Returns:
+        bool: True si la descarga fue exitosa, False en caso contrario
+    """
+    try:
+        # Crear directorio si no existe
+        os.makedirs(os.path.dirname(ruta_destino), exist_ok=True)
+        
+        # Verificar si el modelo ya existe
+        if os.path.exists(ruta_destino):
+            if st.sidebar.checkbox("El modelo ya existe localmente. ¿Descargar de nuevo?", value=False):
+                pass  # Continuar con la descarga
+            else:
+                st.sidebar.success(f"Usando modelo existente en: {ruta_destino}")
+                return True
+        
+        # Para mejor compatibilidad con Hugging Face y Git LFS
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+        
+        # Mostrar mensaje de descarga (usamos el tamaño conocido si no podemos determinarlo)
+        with st.spinner(f"Descargando modelo desde Hugging Face. Este proceso puede tardar varios minutos debido al tamaño del modelo (aproximadamente 436 MB)..."):
+            # Realizar solicitud con streaming para archivos grandes
+            response = requests.get(url, stream=True, headers=headers, allow_redirects=True, timeout=60)
+            
+            # Comprobar si la solicitud fue exitosa
+            if response.status_code != 200:
+                st.error(f"Error al descargar el modelo: Código de estado {response.status_code}")
+                return False
+            
+            # Obtener tamaño total (si está disponible)
+            total_size = int(response.headers.get('content-length', 0))
+            
+            # Si no tenemos tamaño pero la respuesta es 200, usamos un valor aproximado
+            if total_size == 0:
+                total_size = 436 * 1024 * 1024  # 436 MB en bytes (aproximado)
+                st.warning("No se pudo determinar el tamaño exacto del archivo. Usando valor aproximado.")
+            
+            # Inicializar la barra de progreso
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            status_text.text("Iniciando descarga...")
+            
+            # Guardar el archivo a disco
+            downloaded = 0
+            try:
+                with open(ruta_destino, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+                            downloaded += len(chunk)
+                            
+                            # Actualizar la barra de progreso (cada 1MB para no sobrecargar la UI)
+                            if downloaded % (1024 * 1024) < 8192:  # Actualizar aproximadamente cada 1MB
+                                progress = min(downloaded / total_size, 1.0)
+                                progress_bar.progress(progress)
+                                status_text.text(f"Descargado: {downloaded/(1024*1024):.1f} MB de {total_size/(1024*1024):.1f} MB ({progress*100:.1f}%)")
+            except Exception as e:
+                st.error(f"Error durante la descarga: {str(e)}")
+                # Si se interrumpe la descarga, eliminar el archivo parcial
+                if os.path.exists(ruta_destino):
+                    os.remove(ruta_destino)
+                return False
+            
+            # Completar la barra de progreso
+            progress_bar.progress(1.0)
+            status_text.text(f"Descarga completada: {total_size/(1024*1024):.1f} MB")
+            
+            # Verificar que el archivo se descargó correctamente
+            if os.path.exists(ruta_destino) and os.path.getsize(ruta_destino) > 0:
+                return True
+            else:
+                st.error("La descarga parece haber fallado. El archivo está vacío o no existe.")
+                return False
+                
+    except requests.exceptions.Timeout:
+        st.error(f"Tiempo de espera agotado al intentar descargar el modelo. La conexión es lenta o el servidor no responde.")
+        return False
+    except requests.exceptions.ConnectionError:
+        st.error(f"Error de conexión al intentar descargar el modelo. Verifica tu conexión a internet.")
+        return False
+    except Exception as e:
+        st.error(f"Error al descargar el modelo: {str(e)}")
+        return False
+
+# Función para probar la URL directamente
+def probar_url_huggingface(url):
+    """Prueba si una URL de Hugging Face es accesible e imprime información de diagnóstico"""
+    try:
+        st.info(f"Probando acceso a: {url}")
+        
+        # Intentar una solicitud HEAD primero
+        head_response = requests.head(url, allow_redirects=True, timeout=10)
+        st.write(f"Respuesta HEAD: Código {head_response.status_code}")
+        st.write(f"Headers de respuesta HEAD: {dict(head_response.headers)}")
+        
+        # Intentar una solicitud GET pero solo para los headers
+        get_response = requests.get(url, stream=True, timeout=10)
+        st.write(f"Respuesta GET: Código {get_response.status_code}")
+        st.write(f"Headers de respuesta GET: {dict(get_response.headers)}")
+        get_response.close()  # Cerrar la conexión sin descargar todo
+        
+        # Verificar redirecciones
+        if head_response.history:
+            st.write("La solicitud fue redirigida:")
+            for resp in head_response.history:
+                st.write(f"- Redirigido desde: {resp.url} (código {resp.status_code})")
+            st.write(f"URL final: {head_response.url}")
+        
+        return True
+    except Exception as e:
+        st.error(f"Error al probar la URL: {str(e)}")
+        return False
+
 # Si se elige cargar modelo pre-entrenado
 if modo_modelo == "Usar modelo pre-entrenado":
     st.sidebar.write("### Cargar Modelo Pre-entrenado")
@@ -636,11 +829,11 @@ if modo_modelo == "Usar modelo pre-entrenado":
     # Agregar uso del selector de archivos
     opcion_carga = st.sidebar.radio(
         "Método de carga:",
-        ["Usar ruta predeterminada", "Subir archivo de modelo"]
+        ["Usar ruta predeterminada", "Subir archivo de modelo", "Descargar desde Hugging Face"]
     )
     
     if opcion_carga == "Usar ruta predeterminada":
-        # Opción 1: Usar ruta predeterminada
+        # Este es el código original para la ruta predeterminada
         ruta_modelo = st.sidebar.text_input(
             "Ruta al archivo del modelo:", 
             "models/mejor_modelo.pt"
@@ -694,8 +887,9 @@ if modo_modelo == "Usar modelo pre-entrenado":
                             st.rerun()
             except Exception as e:
                 st.sidebar.error(f"Error al explorar directorio: {str(e)}")
-    else:
-        # Opción 2: Subir archivo directamente
+                
+    elif opcion_carga == "Subir archivo de modelo":
+        # Este es el código original para subir archivo
         archivo_subido = st.sidebar.file_uploader("Sube el archivo del modelo (.pt)", type=['pt'])
         if archivo_subido:
             # Crear directorio temporal si no existe
@@ -708,6 +902,91 @@ if modo_modelo == "Usar modelo pre-entrenado":
         else:
             ruta_modelo = None
             st.sidebar.warning("⚠️ Por favor sube un archivo de modelo (.pt)")
+            
+    else:  # Opción de Hugging Face
+        st.sidebar.write("### Descargar desde Hugging Face")
+        
+        # Modelos predefinidos en Hugging Face
+        modelos_huggingface = {
+            "BERT Sentimiento Políticas Energéticas": {
+                "url": "https://huggingface.co/junortiz/BERT_analisis_sentimiento_politicas_colombia/resolve/main/mejor_modelo.pt",
+                "descripcion": "Modelo BERT entrenado para analizar sentimientos en comentarios sobre políticas energéticas en Colombia.",
+                "autor": "junortiz",
+                "tamaño": "436 MB"
+            }
+        }
+        
+        # Selector de modelo
+        modelo_seleccionado = st.sidebar.selectbox(
+            "Seleccionar modelo preentrenado:",
+            list(modelos_huggingface.keys())
+        )
+        
+        # Mostrar información del modelo seleccionado
+        info_modelo = modelos_huggingface[modelo_seleccionado]
+        
+        st.sidebar.markdown(f"""
+        **Modelo**: {modelo_seleccionado}  
+        **Autor**: {info_modelo['autor']}  
+        **Tamaño**: {info_modelo['tamaño']}  
+        **Descripción**: {info_modelo['descripcion']}
+        """)
+        
+        # URL predeterminada del modelo seleccionado
+        url_default = info_modelo['url']
+        
+        # Opción para URL personalizada
+        mostrar_url_personalizada = st.sidebar.checkbox("Usar URL personalizada", value=False)
+        
+        if mostrar_url_personalizada:
+            url_personalizada = st.sidebar.text_input(
+                "URL del modelo en Hugging Face:",
+                value=url_default
+            )
+        else:
+            url_personalizada = url_default
+
+        # Código de diagnóstico para la URL
+        if st.sidebar.checkbox("Diagnosticar URL de Hugging Face"):
+            probar_url_huggingface(url_personalizada)
+
+        # Crear directorio para modelos descargados
+        os.makedirs("huggingface_models", exist_ok=True)
+        
+        # Definir la ruta de destino
+        ruta_modelo = "huggingface_models/mejor_modelo.pt"
+        
+        # Verificar si el modelo ya está descargado
+        if os.path.exists(ruta_modelo):
+            st.sidebar.success(f"✅ Modelo ya está descargado en: {ruta_modelo}")
+            # Opción para volver a descargar
+            if st.sidebar.button("Descargar de nuevo", key="redownload"):
+                # Descargar el modelo
+                descarga_exitosa = descargar_modelo_huggingface(url_personalizada, ruta_modelo)
+                if not descarga_exitosa:
+                    ruta_modelo = None
+        else:
+            # Verificar disponibilidad del modelo
+            disponible, tamanio_mb = verificar_modelo_huggingface(url_personalizada)
+            
+            if disponible:
+                st.sidebar.info(f"✓ Modelo disponible para descarga ({tamanio_mb} MB)")
+                
+                # Botón para descargar
+                if st.sidebar.button("Descargar Modelo", type="primary"):
+                    # Descargar el modelo
+                    descarga_exitosa = descargar_modelo_huggingface(url_personalizada, ruta_modelo)
+                    
+                    if descarga_exitosa:
+                        st.sidebar.success(f"✅ Modelo descargado correctamente y guardado en {ruta_modelo}")
+                    else:
+                        ruta_modelo = None
+                        st.sidebar.error("❌ Error al descargar el modelo")
+                else:
+                    ruta_modelo = None
+            else:
+                st.sidebar.error("❌ El modelo no está disponible en la URL proporcionada")
+                ruta_modelo = None
     
     # Botón para cargar el modelo
     if ruta_modelo:  # Solo habilitar si hay ruta
